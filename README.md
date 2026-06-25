@@ -10,23 +10,6 @@ El ecosistema combina el procesamiento distribuido en memoria de **PySpark**, el
 
 El flujo de información se divide en tres módulos secuenciales desacoplados para garantizar la escalabilidad y facilitar el despliegue en entornos locales:
 
-[ Matriz Transaccional ] (15k operaciones en memoria)
-│
-▼
-┌──────────────────────────┐
-│ 1. PySpark Pipeline     │ ──► Ventanas móviles de 24h & Reglas PLD
-└──────────────────────────┘
-│
-▼  [Bypass Seguro via Pandas]
-┌──────────────────────────┐
-│ 2. NetworkX Graph Module │ ──► Mapeo de Red, Centralidad y PageRank
-└──────────────────────────┘
-│
-▼  [Consolidación de Features]
-┌──────────────────────────┐
-│ 3. Random Forest Model   │ ──► Clasificación de Riesgo & Importancia de Variables
-└──────────────────────────┘
-
 
 1. **Ingeniería de Características en Tiempo Real (PySpark):** Simula y procesa flujos masivos de transferencias (`SPEI`, `Efectivo`, `Cajero`). Calcula perfiles agregados mediante ventanas analíticas móviles de 24 horas (`monto_acumulado_24h`, `conteo_transacciones_24h`) para encender las primeras alertas regulatorias.
 2. **Enriquecimiento Topológico (NetworkX):** Construye un grafo dirigido del flujo del dinero. Transforma las cuentas en nodos y las operaciones en aristas, extrayendo métricas de red avanzadas como la centralidad de entrada/salida y el algoritmo *PageRank* ponderado por monto para identificar nodos concentradores o dispersores de fondos.
