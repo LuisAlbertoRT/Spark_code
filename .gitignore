@@ -1,0 +1,43 @@
+# =========================================================================
+# DATOS Y COMPONENTES DEL PROYECTO (COMPLIANCE AML)
+# =========================================================================
+# Bloquear la carpeta de salida de datos locales y gráficas del pipeline
+proyecto_aml/
+
+# Archivos de datos sueltos (CSV, Parquet, Excel, SQLite)
+*.csv
+*.parquet
+*.xlsx
+*.xls
+*.db
+*.sqlite
+
+# =========================================================================
+# ENTORNO VIRTUAL Y PYTHON
+# =========================================================================
+# Bloquear el entorno virtual de Python para no subir librerías pesadas
+.venv/
+venv/
+env/
+ENV/
+Intel/
+
+# Archivos compilados de Python
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# =========================================================================
+# CONFIGURACIONES DE SPARK / HADOOP / IDE
+# =========================================================================
+# Logs de ejecución de Spark y Java
+*.log
+metastore_db/
+derby.log
+.spark_staged/
+
+# Configuraciones de VS Code o editores
+.vscode/
+.idea/
+.DS_Store
