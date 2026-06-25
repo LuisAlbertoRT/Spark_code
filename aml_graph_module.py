@@ -1,57 +1,100 @@
 import os
-import sys
 import pandas as pd
 import networkx as nx
+import matplotlib.pyplot as plt
 
-print("--> [INFO] Iniciando Módulo de Análisis de Grafos...")
+# =========================================================================
+# 1. CARGA DE DATOS DESDE EL BYPASS DE PYSPARK
+# =========================================================================
+ruta_csv = "./proyecto_aml/datos_estructurados_locales.csv"
 
-# 1. Rutas locales de tus datos procesados por Spark
-ruta_parquet = "./proyecto_aml/datos_estructurados.parquet"
+if not os.path.exists(ruta_csv):
+    raise FileNotFoundError(f"No se encontró el archivo {ruta_csv}. Ejecuta primero aml_pyspark_pipeline.py")
 
-if not os.path.exists(ruta_parquet):
-    print(f"❌ ERROR: No se encontraron los datos de Spark en {ruta_parquet}.")
-    print("Asegúrate de haber ejecutado el script de PySpark primero.")
-    sys.exit()
+print(f"--> [INFO] Cargando datos estructurados desde: {ruta_csv}")
+df = pd.read_csv(ruta_csv)
 
-# 2. Cargar los datos a Pandas para el análisis de red local
-# Spark guardó un archivo optimizado; lo leemos directamente
-df_transacciones = pd.read_parquet(ruta_parquet)
+# =========================================================================
+# 2. CONSTRUCCIÓN DEL GRAFO DIRIGIDO CON NETWORKX
+# =========================================================================
+print("--> [INFO] Inicializando grafo dirigido de transacciones...")
+# Usamos DiGraph porque el flujo de dinero tiene un origen y un destino claro
+G = nx.DiGraph()
 
-print(f"--> [INFO] Registros cargados para el grafo: {len(df_transacciones)}")
+# Añadir aristas con atributos embebidos desde el DataFrame
+for _, fila in df.iterrows():
+    G.add_edge(
+        fila['id_origen'], 
+        fila['id_destino'], 
+        id_transaccion=fila['id_transaccion'],
+        monto=float(fila['monto']),
+        canal=fila['tipo_canal'],
+        timestamp=fila['timestamp_str'],
+        sospecha_estructuracion=int(fila['sospecha_estructuracion'])
+    )
 
-# 3. Construir el Grafo Dirigido (Origen -> Destino)
-# En prevención de lavado de dinero, la dirección del dinero lo es todo
-G = nx.from_pandas_edgelist(
-    df_transacciones.head(50000), # Procesamos un subconjunto denso para optimizar memoria local
-    source='id_origen',
-    target='id_destino',
-    edge_attr=['monto', 'tipo_canal'],
-    create_using=nx.DiGraph()
-)
+print(f"--> [OK] Grafo construido: {G.number_of_nodes()} Clientes (Nodos) y {G.number_of_edges()} Transacciones (Aristas).")
 
-print(f"--> [INFO] Grafo construido con {G.number_of_nodes()} nodos (clientes) y {G.number_of_edges()} bordes (transferencias).")
+# =========================================================================
+# 3. ANÁLISIS DE TOPOLOGÍA Y MÉTRICAS DE RED (PLD / AML)
+# =========================================================================
+print("--> [INFO] Calculando métricas de centralidad para detección de anomalías...")
 
-# 4. Calcular Métricas de Centralidad Topológica
-print("--> [INFO] Calculando métricas de conectividad estructural (Degree Centrality)...")
+# In-Degree: Cuentas que reciben transferencias masivas (posibles concentradoras)
+in_degree = nx.in_degree_centrality(G)
+# Out-Degree: Cuentas que dispersan fondos rápidamente (posibles pitufos/estructuradores)
+out_degree = nx.out_degree_centrality(G)
+# PageRank: Identifica la relevancia/riesgo de una cuenta basado en sus conexiones estructurales
+pagerank = nx.pagerank(G, weight='monto')
 
-# Grado de salida (Out-Degree): Cuántas transferencias envía un cliente. 
-# Un valor inusualmente alto indica un posible dispersor de fondos.
-out_degree_dict = nx.out_degree_centrality(G)
+# Mapear métricas al DataFrame de nodos para análisis posterior
+df_nodos = pd.DataFrame({
+    'id_cliente': list(G.nodes()),
+    'centralidad_entrada': [in_degree[nodo] for nodo in G.nodes()],
+    'centralidad_salida': [out_degree[nodo] for nodo in G.nodes()],
+    'score_pagerank': [pagerank[nodo] for nodo in G.nodes()]
+})
 
-# Grado de entrada (In-Degree): Cuántas transferencias recibe un cliente.
-# Un valor alto indica un concentrador de fondos.
-in_degree_dict = nx.in_degree_centrality(G)
+# Guardar métricas topológicas para el modelo predictivo
+ruta_metricas = "./proyecto_aml/metricas_topologicas_grafo.csv"
+df_nodos.to_csv(ruta_metricas, index=False)
+print(f"--> [OK] Métricas de red exportadas a: {ruta_metricas}")
 
-# 5. Mapear las métricas de grafos de regreso al DataFrame original
-df_transacciones['grafo_out_centrality'] = df_transacciones['id_origen'].map(out_degree_dict).fillna(0)
-df_transacciones['grafo_in_centrality'] = df_transacciones['id_destino'].map(in_degree_dict).fillna(0)
+# =========================================================================
+# 4. VISUALIZACIÓN COMPACTA DEL SUBGRAFO DE ALTO RIESGO
+# =========================================================================
+print("--> [INFO] Generando mapa visual del subgrafo de transacciones sospechosas...")
 
-# 6. Identificar anomalías por estructura de red
-print("\n=== DETECCIÓN DE CLIENTES CON COMPORTAMIENTO ANÓMALO EN RED ===")
-df_analisis_red = df_transacciones.sort_values(by='grafo_out_centrality', ascending=False)
-print(df_analisis_red[['id_origen', 'id_destino', 'monto', 'grafo_out_centrality', 'sospecha_estructuracion']].head(10))
+# Filtrar transacciones marcadas con sospecha de estructuración por el pipeline de Spark
+aristas_sospechosas = [
+    (u, v) for u, v, attrs in G.edges(data=True) if attrs['sospecha_estructuracion'] == 1
+]
 
-# 7. Guardar el Dataset Enriquecido con variables de Spark + Grafos
-ruta_salida_enriquecida = "./proyecto_aml/datos_enriquecidos_modelo.csv"
-df_transacciones.to_csv(ruta_salida_enriquecida, index=False)
-print(f"\n--> [INFO] Master Dataset listo para Modelado Predictivo guardado en: {ruta_salida_enriquecida}")
+if aristas_sospechosas:
+    # Crear un subgrafo exclusivamente con las alertas de lavado de dinero
+    H = G.edge_subgraph(aristas_sospechosas).copy()
+    
+    plt.figure(figsize=(12, 8))
+    pos = nx.spring_layout(H, k=0.3, seed=42)
+    
+    # Dibujar nodos del subgrafo afectado
+    nx.draw_networkx_nodes(H, pos, node_size=300, node_color='red', alpha=0.8)
+    # Dibujar flechas de flujo de fondos sospechosos
+    nx.draw_networkx_edges(H, pos, edgelist=aristas_sospechosas, width=1.5, edge_color='darkred', arrowstyle='->', arrowsize=15)
+    # Etiquetas de las cuentas
+    nx.draw_networkx_labels(H, pos, font_size=8, font_color='black')
+    
+    plt.title("Subgrafo de Alertas por Estructuración (Bypass Pipeline)", fontsize=14, fontweight='bold')
+    plt.axis('off')
+    
+    # Guardar visualización en disco
+    ruta_grafica = "./proyecto_aml/subgrafo_alertas_aml.png"
+    plt.savefig(ruta_grafica, bbox_inches='tight', dpi=150)
+    plt.close()
+    print(f"--> [OK] Gráfica de red guardada en: {ruta_grafica}")
+else:
+    print("--> [INFO] No se encontraron transacciones sospechosas con los umbrales actuales para graficar.")
+
+print(f"\n==================================================================")
+print(f"--> [OK] ¡MÓDULO DE GRAFOS COMPLETADO EXITOSAMENTE!")
+print(f"==================================================================")
